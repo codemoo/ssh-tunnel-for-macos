@@ -85,3 +85,39 @@ xcodebuild -project SSHTunnel.xcodeproj -scheme SSHTunnel -configuration Release
 SSH Tunnel Manager is available under the [MIT License](LICENSE).
 
 <a href="https://www.buymeacoffee.com/typ0s2d10" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/arial-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
+
+---
+
+## 한국어
+
+macOS 메뉴 막대에서 SSH 터널을 간편하게 관리하는 네이티브 앱입니다.
+
+### 설치
+
+[Releases](https://github.com/TypoStudio/ssh-tunnel-for-macos/releases) 페이지에서 최신 `.dmg` 파일을 다운로드하고, `SSHTunnel.app`을 `응용 프로그램` 폴더로 드래그하세요.
+
+### 주요 기능
+
+- **터널 관리** — 로컬(`-L`), 원격(`-R`), 다이나믹(`-D`) 포트 포워딩을 클릭 한 번으로 연결/해제
+- **SSH Config 연동** — `~/.ssh/config` 호스트를 탐색하고 터널 설정으로 불러오기
+- **인증** — 인증 키 파일 선택, macOS 키체인에 비밀번호 저장
+- **공유 및 가져오기** — `sshtunnel://` URL로 설정 공유, 붙여넣기로 가져오기
+- **메뉴 막대** — 메뉴 막대에서 빠른 연결/해제, SSH 프로세스 모니터링
+- **설정** — 로그인 시 자동 시작, 시작 시 매니저 열기
+- **다국어** — 영어, 한국어 지원
+
+### 키보드 단축키
+
+| 단축키 | 동작 |
+|--------|------|
+| `⌘I` | 공유 문자열에서 가져오기 |
+| `⌘V` | 공유 문자열 붙여넣어 가져오기 |
+| `⌘M` | 메뉴 막대에서 매니저 열기 |
+| `⌘,` | 설정 열기 |
+| `⌘Q` | 앱 종료 |
+| `Esc` | 대화상자 닫기 |
+
+### 요구 사항
+
+- macOS 14.0 (Sonoma) 이상
+- SSH 클라이언트 (macOS 기본 내장)
