@@ -14,12 +14,21 @@ final class ConfigStore {
     }
 
     func load() {
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return }
-        do {
-            let data = try Data(contentsOf: fileURL)
-            configs = try JSONDecoder().decode([SSHTunnelConfig].self, from: data)
-        } catch {
-            print("Failed to load configs: \(error)")
+        if FileManager.default.fileExists(atPath: fileURL.path) {
+            do {
+                let data = try Data(contentsOf: fileURL)
+                configs = try JSONDecoder().decode([SSHTunnelConfig].self, from: data)
+            } catch {
+                print("Failed to load configs: \(error)")
+            }
+            if UserDefaults.standard.data(forKey: "configsBackup") == nil {
+                backup()
+            }
+        } else if let data = UserDefaults.standard.data(forKey: "configsBackup") {
+            if let restored = try? JSONDecoder().decode([SSHTunnelConfig].self, from: data) {
+                configs = restored
+                save()
+            }
         }
     }
 
@@ -31,6 +40,13 @@ final class ConfigStore {
             try data.write(to: fileURL, options: .atomic)
         } catch {
             print("Failed to save configs: \(error)")
+        }
+        backup()
+    }
+
+    private func backup() {
+        if let data = try? JSONEncoder().encode(configs) {
+            UserDefaults.standard.set(data, forKey: "configsBackup")
         }
     }
 
