@@ -183,6 +183,51 @@ struct Model: Codable, Identifiable, Hashable {
 | Manager | `*Manager` | `SSHProcessManager.swift` |
 | 정적 유틸 | `*Service` / `*Parser` | `KeychainService.swift` |
 
+## 릴리즈 배포
+
+### 1. 버전 올리기
+
+`project.yml`에서 `MARKETING_VERSION` 수정.
+
+```yaml
+MARKETING_VERSION: "x.y.z"
+```
+
+### 2. Release 빌드
+
+```bash
+xcodegen generate && xcodebuild -project *.xcodeproj -scheme SSHTunnel -configuration Release build
+```
+
+빌드 결과물 경로: `~/Library/Developer/Xcode/DerivedData/SSHTunnel-*/Build/Products/Release/SSHTunnel.app`
+
+### 3. DMG 생성
+
+```bash
+APP_PATH="$(find ~/Library/Developer/Xcode/DerivedData/SSHTunnel-*/Build/Products/Release/SSHTunnel.app -maxdepth 0)"
+DMG_PATH="/tmp/SSHTunnel-x.y.z.dmg"
+TMP_DIR="/tmp/dmg_staging"
+
+rm -rf "$TMP_DIR" "$DMG_PATH"
+mkdir -p "$TMP_DIR"
+cp -R "$APP_PATH" "$TMP_DIR/"
+ln -s /Applications "$TMP_DIR/Applications"
+hdiutil create -volname "SSHTunnel" -srcfolder "$TMP_DIR" -ov -format UDZO "$DMG_PATH"
+rm -rf "$TMP_DIR"
+```
+
+### 4. 커밋 & 푸시
+
+```bash
+git add -A && git commit -m "Bump version to x.y.z" && git push origin main
+```
+
+### 5. GitHub 릴리즈 생성
+
+```bash
+gh release create vx.y.z /tmp/SSHTunnel-x.y.z.dmg --title "vx.y.z" --notes "릴리즈 노트"
+```
+
 ## 주의사항
 
 - 새 Codable 필드 추가 시 **반드시** `decodeIfPresent`로 기본값 fallback (기존 데이터 손실 방지)
