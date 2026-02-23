@@ -14,3 +14,4 @@ archive/
 
 # Claude
 .claude/
+.omc/
