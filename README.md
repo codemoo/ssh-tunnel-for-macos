@@ -81,6 +81,10 @@ xcodebuild -project SSHTunnel.xcodeproj -scheme SSHTunnel -configuration Release
 - macOS 14.0 (Sonoma) or later
 - SSH client (pre-installed on macOS)
 
+## Also Available
+
+Looking for the Windows version? Check out [SSH Tunnel Manager for Windows](https://github.com/TypoStudio/ssh-tunnel-for-win).
+
 ## License
 
 Copyright (c) 2026 TypoStudio (typ0s2d10@gmail.com)\
@@ -126,3 +130,7 @@ macOS 메뉴 막대에서 SSH 터널을 간편하게 관리하는 네이티브 �
 
 - macOS 14.0 (Sonoma) 이상
 - SSH 클라이언트 (macOS 기본 내장)
+
+### Windows 버전
+
+Windows 버전은 [SSH Tunnel Manager for Windows](https://github.com/TypoStudio/ssh-tunnel-for-win)에서 확인하세요.
