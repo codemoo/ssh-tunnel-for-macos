@@ -69,6 +69,7 @@ struct SSHTunnelConfig: Codable, Identifiable, Hashable {
     var autoConnect: Bool = false
     var disconnectOnQuit: Bool = true
     var autoReconnect: Bool = true
+    var autoEnableSystemSocksProxy: Bool = false
     var additionalArgs: String = ""
 
     init(from decoder: Decoder) throws {
@@ -84,6 +85,7 @@ struct SSHTunnelConfig: Codable, Identifiable, Hashable {
         autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? false
         disconnectOnQuit = try c.decodeIfPresent(Bool.self, forKey: .disconnectOnQuit) ?? true
         autoReconnect = try c.decodeIfPresent(Bool.self, forKey: .autoReconnect) ?? true
+        autoEnableSystemSocksProxy = try c.decodeIfPresent(Bool.self, forKey: .autoEnableSystemSocksProxy) ?? false
         additionalArgs = try c.decodeIfPresent(String.self, forKey: .additionalArgs) ?? ""
     }
 
