@@ -19,7 +19,15 @@ final class SSHProcessManager {
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
     private let systemProxyService = SystemProxyService()
-    private var previousSocksProxyStates: [UUID: SocksProxyState] = [:]
+
+    private struct ActiveSocksProxySession {
+        var serviceName: String
+        var host: String
+        var port: UInt16
+        var previousState: SocksProxyState
+        var owners: Set<UUID>
+    }
+    private var activeSocksProxySession: ActiveSocksProxySession?
 
     init(status: TunnelStatus) {
         self.status = status
@@ -34,11 +42,13 @@ final class SSHProcessManager {
             }
         }
         networkMonitor.start(queue: DispatchQueue.global(qos: .utility))
+        cleanupStaleAskPassScripts()
     }
 
     /// Returns local ports that are already in use
     func checkPortConflicts(_ config: SSHTunnelConfig) -> [UInt16] {
         config.tunnels.compactMap { entry in
+            guard entry.type != .remote else { return nil }
             let port = entry.localPort
             guard port > 0 else { return nil }
             let sock = socket(AF_INET, SOCK_STREAM, 0)
@@ -67,7 +77,6 @@ final class SSHProcessManager {
         pendingReconnect.remove(id)
         reconnectTimers[id]?.cancel()
         reconnectTimers.removeValue(forKey: id)
-        retryCounts.removeValue(forKey: id)
         manualDisconnects.remove(id)
 
         status.states[id] = .connecting
@@ -75,6 +84,8 @@ final class SSHProcessManager {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         process.arguments = buildArguments(for: config)
+
+        var usesAskPass = false
 
         // If using password auth, use SSH_ASKPASS to provide it
         if config.authMethod == .password,
@@ -85,6 +96,7 @@ final class SSHProcessManager {
             env["SSH_ASKPASS_REQUIRE"] = "force"
             env["DISPLAY"] = ":0"
             process.environment = env
+            usesAskPass = true
         }
 
         let pipe = Pipe()
@@ -114,13 +126,18 @@ final class SSHProcessManager {
 
                 self.disableSystemProxyIfNeeded(configId: id)
 
+                let wasConnecting = self.status.state(for: id) == .connecting
+
                 if proc.terminationStatus == 0 {
                     self.status.states[id] = .disconnected
-                } else if self.status.state(for: id) == .connecting {
-                    self.status.states[id] = .error(String(localized: "Connection failed (exit \(proc.terminationStatus))"))
                 } else {
                     self.status.states[id] = .disconnected
-                    // Auto-reconnect on unexpected disconnect
+
+                    if wasConnecting {
+                        self.status.states[id] = .error(String(localized: "Connection failed (exit \(proc.terminationStatus))"))
+                    }
+
+                    // Auto-reconnect on unexpected disconnect / connect failure
                     if !self.manualDisconnects.contains(id),
                        let config = self.reconnectConfigs[id],
                        config.autoReconnect {
@@ -143,11 +160,15 @@ final class SSHProcessManager {
             let timer = DispatchWorkItem { [weak self] in
                 guard let self, let proc = self.processes[id], proc.isRunning else { return }
                 self.status.states[id] = .connected
+                self.retryCounts[id] = 0
                 self.enableSystemProxyIfNeeded(config)
             }
             connectTimers[id] = timer
             DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timer)
         } catch {
+            if usesAskPass {
+                cleanupAskPassScript(configId: id)
+            }
             status.states[id] = .error(error.localizedDescription)
         }
     }
@@ -179,7 +200,8 @@ final class SSHProcessManager {
     }
 
     func disconnectAll() {
-        for id in processes.keys {
+        let ids = Set(processes.keys).union(pendingReconnect)
+        for id in ids {
             disconnect(id)
         }
     }
@@ -246,7 +268,6 @@ final class SSHProcessManager {
 
     private func reconnectPending() {
         for id in pendingReconnect {
-            retryCounts[id] = 0
             scheduleReconnect(id)
         }
     }
@@ -267,29 +288,73 @@ final class SSHProcessManager {
 
         do {
             let serviceName = try systemProxyService.activeServiceName()
-            let previous = try systemProxyService.currentSocksProxyState(for: serviceName)
-            previousSocksProxyStates[config.id] = previous
+            let targetHost = "127.0.0.1"
+            let targetPort = dynamicTunnel.localPort
 
-            try systemProxyService.enableSocksProxy(serviceName: serviceName, host: "127.0.0.1", port: dynamicTunnel.localPort)
-            logs[config.id, default: ""].append("\n[System] Enabled SOCKS proxy on \(serviceName): 127.0.0.1:\(dynamicTunnel.localPort)\n")
+            if var session = activeSocksProxySession {
+                guard session.serviceName == serviceName else {
+                    logs[config.id, default: ""].append("\n[System] Skipped SOCKS enable: active proxy session uses a different network service (\(session.serviceName)).\n")
+                    return
+                }
+
+                guard session.host == targetHost, session.port == targetPort else {
+                    logs[config.id, default: ""].append("\n[System] Skipped SOCKS enable: another active tunnel already owns SOCKS at \(session.host):\(session.port).\n")
+                    return
+                }
+
+                session.owners.insert(config.id)
+                activeSocksProxySession = session
+                logs[config.id, default: ""].append("\n[System] Reused SOCKS proxy owner set on \(serviceName): \(targetHost):\(targetPort)\n")
+                return
+            }
+
+            let previous = try systemProxyService.currentSocksProxyState(for: serviceName)
+            try systemProxyService.enableSocksProxy(serviceName: serviceName, host: targetHost, port: targetPort)
+
+            activeSocksProxySession = ActiveSocksProxySession(
+                serviceName: serviceName,
+                host: targetHost,
+                port: targetPort,
+                previousState: previous,
+                owners: [config.id]
+            )
+            logs[config.id, default: ""].append("\n[System] Enabled SOCKS proxy on \(serviceName): \(targetHost):\(targetPort)\n")
         } catch {
             logs[config.id, default: ""].append("\n[System] Failed to enable SOCKS proxy: \(error.localizedDescription)\n")
         }
     }
 
     private func disableSystemProxyIfNeeded(configId: UUID) {
-        guard let previous = previousSocksProxyStates[configId] else { return }
-        defer { previousSocksProxyStates.removeValue(forKey: configId) }
+        guard var session = activeSocksProxySession else { return }
+        guard session.owners.contains(configId) else { return }
+
+        session.owners.remove(configId)
+        if !session.owners.isEmpty {
+            activeSocksProxySession = session
+            logs[configId, default: ""].append("\n[System] SOCKS proxy still in use by \(session.owners.count) tunnel(s), keeping current state.\n")
+            return
+        }
 
         do {
-            try systemProxyService.restoreSocksProxyState(previous)
-            logs[configId, default: ""].append("\n[System] Restored SOCKS proxy on \(previous.serviceName) (enabled=\(previous.enabled ? "Yes" : "No"))\n")
+            try systemProxyService.restoreSocksProxyState(session.previousState)
+            logs[configId, default: ""].append("\n[System] Restored SOCKS proxy on \(session.previousState.serviceName) (enabled=\(session.previousState.enabled ? "Yes" : "No"))\n")
         } catch {
             logs[configId, default: ""].append("\n[System] Failed to restore SOCKS proxy: \(error.localizedDescription)\n")
         }
+
+        activeSocksProxySession = nil
     }
 
     // MARK: - SSH_ASKPASS helper
+
+    private func cleanupStaleAskPassScripts() {
+        let tmpDir = FileManager.default.temporaryDirectory
+        guard let files = try? FileManager.default.contentsOfDirectory(at: tmpDir, includingPropertiesForKeys: nil) else { return }
+
+        for file in files where file.lastPathComponent.hasPrefix("sshtunnel-askpass-") && file.pathExtension == "sh" {
+            try? FileManager.default.removeItem(at: file)
+        }
+    }
 
     private func createAskPassScript(password: String, configId: UUID) -> String {
         let tmpDir = FileManager.default.temporaryDirectory

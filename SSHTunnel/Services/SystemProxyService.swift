@@ -97,19 +97,22 @@ final class SystemProxyService {
         for rawLine in output.split(separator: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
 
-            if line.hasPrefix("(") && line.contains(")") {
-                // Example: (1) Wi-Fi
+            // Example: (1) Wi-Fi
+            if line.hasPrefix("("), line.contains(") "), !line.contains("Hardware Port:") {
                 if let idx = line.firstIndex(of: ")") {
                     pendingService = String(line[line.index(after: idx)...]).trimmingCharacters(in: .whitespaces)
                 }
                 continue
             }
 
-            if line.hasPrefix("(Device:") {
-                let device = line
-                    .replacingOccurrences(of: "(Device:", with: "")
-                    .replacingOccurrences(of: ")", with: "")
-                    .trimmingCharacters(in: .whitespaces)
+            // Example: (Hardware Port: Wi-Fi, Device: en0)
+            if line.hasPrefix("(Hardware Port:") {
+                guard let deviceRange = line.range(of: "Device:") else { continue }
+                var device = String(line[deviceRange.upperBound...]).trimmingCharacters(in: .whitespaces)
+                if device.hasSuffix(")") {
+                    device.removeLast()
+                    device = device.trimmingCharacters(in: .whitespaces)
+                }
 
                 if device == interface, let service = pendingService, !service.isEmpty {
                     return service
