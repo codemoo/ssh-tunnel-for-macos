@@ -7,6 +7,7 @@ struct SSHTunnelApp: App {
     @State private var processManager: SSHProcessManager
     @State private var pendingImport: SSHTunnelConfig?
     @State private var settings = AppSettings()
+    @State private var didRunStartupTasks = false
     @Environment(\.openWindow) private var openWindow
 
     init() {
@@ -18,9 +19,6 @@ struct SSHTunnelApp: App {
     var body: some Scene {
         MenuBarExtra {
             MenuBarView(store: store, processManager: processManager, status: status, settings: settings)
-                .onAppear {
-                    autoConnectOnLaunch()
-                }
                 .onReceive(NotificationCenter.default.publisher(for: .openManagerWindow)) { _ in
                     openWindow(id: "main")
                     NSApp.activate(ignoringOtherApps: true)
@@ -28,21 +26,7 @@ struct SSHTunnelApp: App {
         } label: {
             Image("MenuBarIcon")
                 .onAppear {
-                    // label onAppear fires once at app launch
-                    if settings.openManagerOnLaunch {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                            openWindow(id: "main")
-                            NSApp.activate(ignoringOtherApps: true)
-                        }
-                    }
-                    if settings.autoCheckForUpdates {
-                        Task {
-                            if let info = await UpdateService.checkForUpdate() {
-                                NSApp.activate(ignoringOtherApps: true)
-                                showUpdateAlert(info: info)
-                            }
-                        }
-                    }
+                    runStartupTasksIfNeeded()
                 }
         }
 
@@ -54,6 +38,12 @@ struct SSHTunnelApp: App {
             TunnelListView(store: store, processManager: processManager, status: status)
                 .onOpenURL { url in
                     handleURL(url)
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .requestQuitApp)) { _ in
+                    processManager.disconnectOnQuit(configs: store.configs)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                        NSApplication.shared.terminate(nil)
+                    }
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     processManager.disconnectOnQuit(configs: store.configs)
@@ -71,6 +61,29 @@ struct SSHTunnelApp: App {
             }
         }
         .defaultSize(width: 550, height: 400)
+    }
+
+    private func runStartupTasksIfNeeded() {
+        guard !didRunStartupTasks else { return }
+        didRunStartupTasks = true
+
+        autoConnectOnLaunch()
+
+        if settings.openManagerOnLaunch {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                openWindow(id: "main")
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+
+        if settings.autoCheckForUpdates {
+            Task {
+                if let info = await UpdateService.checkForUpdate() {
+                    NSApp.activate(ignoringOtherApps: true)
+                    showUpdateAlert(info: info)
+                }
+            }
+        }
     }
 
     private func autoConnectOnLaunch() {
@@ -91,6 +104,7 @@ struct SSHTunnelApp: App {
 
 extension Notification.Name {
     static let openManagerWindow = Notification.Name("openManagerWindow")
+    static let requestQuitApp = Notification.Name("requestQuitApp")
 }
 
 // MARK: - URL Import Confirmation

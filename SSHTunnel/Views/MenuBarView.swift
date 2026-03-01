@@ -64,10 +64,7 @@ struct MenuBarView: View {
         .keyboardShortcut(",")
 
         Button(String(localized: "Quit")) {
-            processManager.disconnectAll()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                NSApplication.shared.terminate(nil)
-            }
+            NotificationCenter.default.post(name: .requestQuitApp, object: nil)
         }
         .keyboardShortcut("q")
     }

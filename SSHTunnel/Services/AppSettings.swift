@@ -3,8 +3,13 @@ import ServiceManagement
 
 @Observable
 final class AppSettings {
+    private var isApplyingLaunchAtLogin = false
+
     var launchAtLogin: Bool {
-        didSet { updateLaunchAtLogin() }
+        didSet {
+            guard !isApplyingLaunchAtLogin else { return }
+            updateLaunchAtLogin()
+        }
     }
     var openManagerOnLaunch: Bool {
         didSet { UserDefaults.standard.set(openManagerOnLaunch, forKey: "openManagerOnLaunch") }
@@ -25,6 +30,9 @@ final class AppSettings {
     }
 
     private func updateLaunchAtLogin() {
+        isApplyingLaunchAtLogin = true
+        defer { isApplyingLaunchAtLogin = false }
+
         do {
             if launchAtLogin {
                 try SMAppService.mainApp.register()
@@ -33,8 +41,10 @@ final class AppSettings {
             }
         } catch {
             print("Failed to update launch at login: \(error)")
-            // Revert on failure
-            launchAtLogin = SMAppService.mainApp.status == .enabled
+            let actual = SMAppService.mainApp.status == .enabled
+            if launchAtLogin != actual {
+                launchAtLogin = actual
+            }
         }
     }
 }
