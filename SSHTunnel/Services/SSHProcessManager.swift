@@ -18,6 +18,8 @@ final class SSHProcessManager {
     private var retryCounts: [UUID: Int] = [:]
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
+    private let systemProxyService = SystemProxyService()
+    private var activeSocksProxies: [UUID: ActiveSocksProxy] = [:]
 
     init(status: TunnelStatus) {
         self.status = status
@@ -110,6 +112,8 @@ final class SSHProcessManager {
                 self.pipes[id]?.fileHandleForReading.readabilityHandler = nil
                 self.pipes.removeValue(forKey: id)
 
+                self.disableSystemProxyIfNeeded(configId: id)
+
                 if proc.terminationStatus == 0 {
                     self.status.states[id] = .disconnected
                 } else if self.status.state(for: id) == .connecting {
@@ -139,6 +143,7 @@ final class SSHProcessManager {
             let timer = DispatchWorkItem { [weak self] in
                 guard let self, let proc = self.processes[id], proc.isRunning else { return }
                 self.status.states[id] = .connected
+                self.enableSystemProxyIfNeeded(config)
             }
             connectTimers[id] = timer
             DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: timer)
@@ -158,6 +163,7 @@ final class SSHProcessManager {
         connectTimers.removeValue(forKey: configId)
 
         guard let process = processes[configId], process.isRunning else {
+            disableSystemProxyIfNeeded(configId: configId)
             status.states[configId] = .disconnected
             return
         }
@@ -251,6 +257,33 @@ final class SSHProcessManager {
         reconnectTimers.removeValue(forKey: configId)
         retryCounts.removeValue(forKey: configId)
         reconnectConfigs.removeValue(forKey: configId)
+    }
+
+    // MARK: - System SOCKS proxy
+
+    private func enableSystemProxyIfNeeded(_ config: SSHTunnelConfig) {
+        guard config.autoEnableSystemSocksProxy else { return }
+        guard let dynamicTunnel = config.tunnels.first(where: { $0.type == .dynamic && $0.localPort > 0 }) else { return }
+
+        do {
+            let activeProxy = try systemProxyService.enableSocksProxy(port: dynamicTunnel.localPort)
+            activeSocksProxies[config.id] = activeProxy
+            logs[config.id, default: ""].append("\n[System] Enabled SOCKS proxy on \(activeProxy.serviceName): \(activeProxy.host):\(activeProxy.port)\n")
+        } catch {
+            logs[config.id, default: ""].append("\n[System] Failed to enable SOCKS proxy: \(error.localizedDescription)\n")
+        }
+    }
+
+    private func disableSystemProxyIfNeeded(configId: UUID) {
+        guard let activeProxy = activeSocksProxies[configId] else { return }
+        defer { activeSocksProxies.removeValue(forKey: configId) }
+
+        do {
+            try systemProxyService.disableSocksProxy(for: activeProxy.serviceName)
+            logs[configId, default: ""].append("\n[System] Disabled SOCKS proxy on \(activeProxy.serviceName)\n")
+        } catch {
+            logs[configId, default: ""].append("\n[System] Failed to disable SOCKS proxy: \(error.localizedDescription)\n")
+        }
     }
 
     // MARK: - SSH_ASKPASS helper

@@ -80,6 +80,9 @@ struct TunnelDetailView: View {
                 Toggle(String(localized: "Auto-connect on launch"), isOn: $draft.autoConnect)
                 Toggle(String(localized: "Disconnect on quit"), isOn: $draft.disconnectOnQuit)
                 Toggle(String(localized: "Auto-reconnect on disconnect"), isOn: $draft.autoReconnect)
+                if draft.tunnels.contains(where: { $0.type == .dynamic }) {
+                    Toggle(String(localized: "Enable macOS SOCKS proxy when connected"), isOn: $draft.autoEnableSystemSocksProxy)
+                }
                 TextField(String(localized: "Additional SSH Arguments"), text: $draft.additionalArgs)
             }
 
