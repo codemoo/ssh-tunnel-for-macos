@@ -19,7 +19,7 @@ final class SSHProcessManager {
     private let networkMonitor = NWPathMonitor()
     private var isNetworkAvailable = true
     private let systemProxyService = SystemProxyService()
-    private var activeSocksProxies: [UUID: ActiveSocksProxy] = [:]
+    private var previousSocksProxyStates: [UUID: SocksProxyState] = [:]
 
     init(status: TunnelStatus) {
         self.status = status
@@ -266,23 +266,26 @@ final class SSHProcessManager {
         guard let dynamicTunnel = config.tunnels.first(where: { $0.type == .dynamic && $0.localPort > 0 }) else { return }
 
         do {
-            let activeProxy = try systemProxyService.enableSocksProxy(port: dynamicTunnel.localPort)
-            activeSocksProxies[config.id] = activeProxy
-            logs[config.id, default: ""].append("\n[System] Enabled SOCKS proxy on \(activeProxy.serviceName): \(activeProxy.host):\(activeProxy.port)\n")
+            let serviceName = try systemProxyService.activeServiceName()
+            let previous = try systemProxyService.currentSocksProxyState(for: serviceName)
+            previousSocksProxyStates[config.id] = previous
+
+            try systemProxyService.enableSocksProxy(serviceName: serviceName, host: "127.0.0.1", port: dynamicTunnel.localPort)
+            logs[config.id, default: ""].append("\n[System] Enabled SOCKS proxy on \(serviceName): 127.0.0.1:\(dynamicTunnel.localPort)\n")
         } catch {
             logs[config.id, default: ""].append("\n[System] Failed to enable SOCKS proxy: \(error.localizedDescription)\n")
         }
     }
 
     private func disableSystemProxyIfNeeded(configId: UUID) {
-        guard let activeProxy = activeSocksProxies[configId] else { return }
-        defer { activeSocksProxies.removeValue(forKey: configId) }
+        guard let previous = previousSocksProxyStates[configId] else { return }
+        defer { previousSocksProxyStates.removeValue(forKey: configId) }
 
         do {
-            try systemProxyService.disableSocksProxy(for: activeProxy.serviceName)
-            logs[configId, default: ""].append("\n[System] Disabled SOCKS proxy on \(activeProxy.serviceName)\n")
+            try systemProxyService.restoreSocksProxyState(previous)
+            logs[configId, default: ""].append("\n[System] Restored SOCKS proxy on \(previous.serviceName) (enabled=\(previous.enabled ? "Yes" : "No"))\n")
         } catch {
-            logs[configId, default: ""].append("\n[System] Failed to disable SOCKS proxy: \(error.localizedDescription)\n")
+            logs[configId, default: ""].append("\n[System] Failed to restore SOCKS proxy: \(error.localizedDescription)\n")
         }
     }
 

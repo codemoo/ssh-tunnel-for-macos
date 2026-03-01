@@ -1,7 +1,8 @@
 import Foundation
 
-struct ActiveSocksProxy {
+struct SocksProxyState {
     let serviceName: String
+    let enabled: Bool
     let host: String
     let port: UInt16
 }
@@ -9,6 +10,7 @@ struct ActiveSocksProxy {
 enum SystemProxyError: LocalizedError {
     case defaultInterfaceNotFound
     case networkServiceNotFound(interface: String)
+    case invalidProxyPort(String)
     case commandFailed(String)
 
     var errorDescription: String? {
@@ -17,6 +19,8 @@ enum SystemProxyError: LocalizedError {
             return String(localized: "Could not determine default network interface.")
         case .networkServiceNotFound(let interface):
             return String(localized: "Could not find a network service for interface \(interface).")
+        case .invalidProxyPort(let value):
+            return String(localized: "Invalid SOCKS proxy port: \(value)")
         case .commandFailed(let message):
             return message
         }
@@ -27,28 +31,50 @@ final class SystemProxyService {
     private let networksetupPath = "/usr/sbin/networksetup"
     private let routePath = "/sbin/route"
 
-    func enableSocksProxy(host: String = "127.0.0.1", port: UInt16) throws -> ActiveSocksProxy {
-        let service = try activeNetworkService()
-
-        try run(networksetupPath, ["-setsocksfirewallproxy", service, host, "\(port)"])
-        try run(networksetupPath, ["-setsocksfirewallproxystate", service, "on"])
-
-        return ActiveSocksProxy(serviceName: service, host: host, port: port)
-    }
-
-    func disableSocksProxy(for serviceName: String) throws {
-        try run(networksetupPath, ["-setsocksfirewallproxystate", serviceName, "off"])
-    }
-
-    private func activeNetworkService() throws -> String {
+    func activeServiceName() throws -> String {
         let interface = try defaultInterface()
-        let map = try hardwarePortMap()
+        let service = try networkServiceForDevice(interface)
+        return service
+    }
 
-        if let service = map[interface], !service.isEmpty {
-            return service
+    func currentSocksProxyState(for serviceName: String) throws -> SocksProxyState {
+        let output = try run(networksetupPath, ["-getsocksfirewallproxy", serviceName])
+
+        var enabled = false
+        var host = ""
+        var port: UInt16 = 0
+
+        for rawLine in output.split(separator: "\n") {
+            let line = rawLine.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("Enabled:") {
+                enabled = line.replacingOccurrences(of: "Enabled:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                    .caseInsensitiveCompare("Yes") == .orderedSame
+            } else if line.hasPrefix("Server:") {
+                host = line.replacingOccurrences(of: "Server:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+            } else if line.hasPrefix("Port:") {
+                let value = line.replacingOccurrences(of: "Port:", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+                guard let parsed = UInt16(value) else {
+                    throw SystemProxyError.invalidProxyPort(value)
+                }
+                port = parsed
+            }
         }
 
-        throw SystemProxyError.networkServiceNotFound(interface: interface)
+        return SocksProxyState(serviceName: serviceName, enabled: enabled, host: host, port: port)
+    }
+
+    func enableSocksProxy(serviceName: String, host: String = "127.0.0.1", port: UInt16) throws {
+        try run(networksetupPath, ["-setsocksfirewallproxy", serviceName, host, "\(port)"])
+        try run(networksetupPath, ["-setsocksfirewallproxystate", serviceName, "on"])
+    }
+
+    func restoreSocksProxyState(_ state: SocksProxyState) throws {
+        let host = state.host.isEmpty ? "127.0.0.1" : state.host
+        try run(networksetupPath, ["-setsocksfirewallproxy", state.serviceName, host, "\(state.port)"])
+        try run(networksetupPath, ["-setsocksfirewallproxystate", state.serviceName, state.enabled ? "on" : "off"])
     }
 
     private func defaultInterface() throws -> String {
@@ -62,36 +88,36 @@ final class SystemProxyService {
         throw SystemProxyError.defaultInterfaceNotFound
     }
 
-    private func hardwarePortMap() throws -> [String: String] {
-        let output = try run(networksetupPath, ["-listallhardwareports"])
-        var map: [String: String] = [:]
+    private func networkServiceForDevice(_ interface: String) throws -> String {
+        // More robust than -listallhardwareports because users can rename services.
+        let output = try run(networksetupPath, ["-listnetworkserviceorder"])
 
-        var currentService: String?
-        var currentDevice: String?
+        var pendingService: String?
 
-        for rawLine in output.split(separator: "\n", omittingEmptySubsequences: false) {
+        for rawLine in output.split(separator: "\n") {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
 
-            if line.hasPrefix("Hardware Port:") {
-                currentService = line.replacingOccurrences(of: "Hardware Port:", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-            } else if line.hasPrefix("Device:") {
-                currentDevice = line.replacingOccurrences(of: "Device:", with: "")
-                    .trimmingCharacters(in: .whitespaces)
-            } else if line.isEmpty {
-                if let service = currentService, let device = currentDevice {
-                    map[device] = service
+            if line.hasPrefix("(") && line.contains(")") {
+                // Example: (1) Wi-Fi
+                if let idx = line.firstIndex(of: ")") {
+                    pendingService = String(line[line.index(after: idx)...]).trimmingCharacters(in: .whitespaces)
                 }
-                currentService = nil
-                currentDevice = nil
+                continue
+            }
+
+            if line.hasPrefix("(Device:") {
+                let device = line
+                    .replacingOccurrences(of: "(Device:", with: "")
+                    .replacingOccurrences(of: ")", with: "")
+                    .trimmingCharacters(in: .whitespaces)
+
+                if device == interface, let service = pendingService, !service.isEmpty {
+                    return service
+                }
             }
         }
 
-        if let service = currentService, let device = currentDevice {
-            map[device] = service
-        }
-
-        return map
+        throw SystemProxyError.networkServiceNotFound(interface: interface)
     }
 
     @discardableResult
